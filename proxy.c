@@ -4,6 +4,7 @@
 /* Recommended max cache and object sizes */
 #define MAX_CACHE_SIZE 1049000
 #define MAX_OBJECT_SIZE 102400
+#define Cathe_NUM 10
 
 /* You won't lose style points for including this long line in your code */
 static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3\r\n";
@@ -11,9 +12,9 @@ static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64;
 struct {
     char url[MAXLINE], content[MAX_OBJECT_SIZE];
     int cnt, Used; 
-} cache[10];
+} cache[Cathe_NUM];
 
-static int readcnt; 
+static int readcnt = 0; 
 static sem_t readcnt_mutex, writer_mutex;
 
 void *thread(void *);
@@ -22,7 +23,8 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
 void parse_uri(char *uri, char *hostname, char *path, int *port);
 void build_new_request_hdr(rio_t *rio_packet, char *new_request, char *hostname, char *port);
 
-int reader(int fd, char* url);
+int is_cached(char* url);
+void reader(int fd, char* url, int id);
 void writer(int* buf, char* url);
 
 
@@ -81,7 +83,9 @@ void doit(int client_fd) {
         return;
     }
 
-    if(reader(client_fd, url)) {
+    int id = is_cached(url);
+    if(id != -1) {
+        reader(client_fd, url, id);
         fprintf(stdout, "%s from cache\n", url);
         return;
     }
@@ -190,45 +194,43 @@ void build_new_request_hdr(rio_t *real_client, char *new_request, char *hostname
 }
 
 
+int is_cached(char* url){
+    for(int i = 0; i < Cathe_NUM; i++){
+        if(cache[i].Used && (strcmp(url, cache[i].url) == 0)) {
+            return i;
+        }
+    }
+    return -1;
+}
 
-
-int reader(int fd, char* url){
+void reader(int fd, char* url, int Id){
     while(1){
-        int Cached = 0; 
-
         P(&readcnt_mutex);
         readcnt++;
         if(readcnt == 1)
             P(&writer_mutex);
         V(&readcnt_mutex);
 
-        for(int i = 0; i < 10; i++){
-            if(cache[i].Used && (strcmp(url, cache[i].url) == 0)){
-                Cached = 1;
-                Rio_writen(fd, cache[i].content, MAX_OBJECT_SIZE);
-                cache[i].cnt++;
-                break;
-            }
-        }
+        Rio_writen(fd, cache[Id].content, MAX_OBJECT_SIZE);
+        cache[Id].cnt++;
 
         P(&readcnt_mutex);
         readcnt--;
         if(readcnt == 0) 
             V(&writer_mutex);
         V(&readcnt_mutex);
-
-        return Cached;        
+        return;    
     }
 }
 
 
 void writer(int* buf, char* url){
     while(1){
-        int Least = cache[0].cnt, LRU_obj;
+        int Least = cache[0].cnt, LRU_obj = 0;
 
         P(&writer_mutex);
 
-        for(int i = 0; i < 10; i++){
+        for(int i = 0; i < Cathe_NUM; i++){
             if(cache[i].Used == 0){
                 LRU_obj = i;
                 break;
@@ -244,5 +246,6 @@ void writer(int* buf, char* url){
         cache[LRU_obj].Used = 1;
 
         V(&writer_mutex);
+        return;
     }
 }
