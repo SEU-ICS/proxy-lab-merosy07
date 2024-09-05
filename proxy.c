@@ -8,14 +8,14 @@
 /* You won't lose style points for including this long line in your code */
 static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3\r\n";
 
+void *thread(void *);
 void doit(int client_fd);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
 void parse_uri(char *uri, char *hostname, char *path, int *port);
 void build_new_request_hdr(rio_t *rio_packet, char *new_request, char *hostname, char *port);
 
-int main(int argc, char **argv) 
-{
-    int listenfd, connfd;
+int main(int argc, char **argv) {
+    int listenfd, *connfd;
     char hostname[MAXLINE], port[MAXLINE];
     socklen_t clientlen;
     struct sockaddr_storage clientaddr;
@@ -30,23 +30,30 @@ int main(int argc, char **argv)
     listenfd = Open_listenfd(argv[1]);
     while (1) {
 		clientlen = sizeof(clientaddr);
-		connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen); 
-    	Getnameinfo((SA *) &clientaddr, clientlen, hostname, MAXLINE, 
-                    port, MAXLINE, 0);
+        connfd = Malloc(sizeof(int));
+		*connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen); 
+    	Getnameinfo((SA *) &clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE, 0);
         printf("Accepted connection from (%s, %s)\n", hostname, port);
-        doit(connfd);
-		Close(connfd);                                                                                     
+//      doit(connfd); Close(connfd);  
+        Pthread_create(&tid, NULL, thread, connfd);                                                                       
     }
 }
 
 
-void doit(int client_fd) 
-{
-    int real_server_fd;
-    char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
+void *thread(void *ptr){
+    int connfd = *((int *)ptr);
+    Pthread_detach(pthread_self());
+    doit(connfd);
+    Free(ptr);
+    Close(connfd);
+    return;
+}
+
+
+void doit(int client_fd) {
+    int real_server_fd, port, len;
+    char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE], hostname[MAXLINE], path[MAXLINE];
     rio_t real_client, real_server;
-    char hostname[MAXLINE], path[MAXLINE];
-    int port;
 
     Rio_readinitb(&real_client, client_fd);
     if (!Rio_readlineb(&real_client, buf, MAXLINE))  	 
@@ -73,16 +80,14 @@ void doit(int client_fd)
 
     Rio_writen(real_server_fd, new_request, strlen(new_request));
     
-    int char_nums;
-    while((char_nums = Rio_readlineb(&real_server, buf, MAXLINE)))
-        Rio_writen(client_fd, buf, char_nums);
+    while((len = Rio_readlineb(&real_server, buf, MAXLINE)))
+        Rio_writen(client_fd, buf, len);
 }
 
 
-void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg) 
-{
+void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg) {
     char buf[MAXLINE], body[MAXBUF];
-
+    
     /* Build the HTTP response body */
     sprintf(body, "<html><title>Tiny Error</title>");
     sprintf(body, "%s<body bgcolor=""ffffff"">\r\n", body);
@@ -103,39 +108,39 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
 
 void parse_uri(char *uri, char *hostname, char *path, int *port) {
     *port = 80; 
-    char* ptr_hostname = strstr(uri,"//");
-    if (ptr_hostname) 
-        ptr_hostname += 2; 
+    char* hostname_ptr = strstr(uri,"//");
+    if (hostname_ptr) 
+        hostname_ptr += 2; 
     else
-        ptr_hostname = uri; 
+        hostname_ptr = uri; 
     
-    char* ptr_port = strstr(ptr_hostname, ":"); 
-    if (ptr_port) {
-        *ptr_port = '\0'; 
-        strncpy(hostname, ptr_hostname, MAXLINE);
-        sscanf(ptr_port + 1,"%d%s", port, path); 
+    char* port_ptr = strstr(hostname_ptr, ":"); 
+    if (port_ptr) {
+        *port_ptr = '\0'; 
+        strncpy(hostname, hostname_ptr, MAXLINE);
+        sscanf(port_ptr + 1,"%d%s", port, path); 
     } 
     else {
-        char* ptr_path = strstr(ptr_hostname,"/");
-        if (ptr_path) {
-            *ptr_path = '\0';
-            strncpy(hostname, ptr_hostname, MAXLINE);
-            *ptr_path = '/';
-            strncpy(path, ptr_path, MAXLINE);
+        char* path_ptr = strstr(hostname_ptr,"/");
+        if (path_ptr) {
+            *path_ptr = '\0';
+            strncpy(hostname, hostname_ptr, MAXLINE);
+            *path_ptr = '/';
+            strncpy(path, path_ptr, MAXLINE);
             return;                               
         }
-        strncpy(hostname, ptr_hostname, MAXLINE);
+        strncpy(hostname, hostname_ptr, MAXLINE);
         strcpy(path,"");
     }
     return;
 }
+
 
 void build_new_request_hdr(rio_t *real_client, char *new_request, char *hostname, char *port){
     char temp_buf[MAXLINE];
 
     while(Rio_readlineb(real_client, temp_buf, MAXLINE) > 0){
         if (strstr(temp_buf, "\r\n")) break; 
-
         if (strstr(temp_buf, "Host:")) continue;
         if (strstr(temp_buf, "User-Agent:")) continue;
         if (strstr(temp_buf, "Connection:")) continue;
